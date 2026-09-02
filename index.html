@@ -262,9 +262,8 @@ let publishedData = null;
 let editMode = false;
 let usingDraft = false;
 
-/* ---------- votes (partagés via CounterAPI v2, compte + workspace) ---------- */
-const VOTE_WORKSPACE = 'goulven-atelier-jdr';
-const VOTE_TOKEN = 'ut_Tvu91EHw8mZhjQkg5VEVH7Y1ZPVPtzncy7nqYKD9';
+/* ---------- votes (partagés via Firebase Realtime Database, public) ---------- */
+const FIREBASE_BASE = 'https://goulven-atelier-jdr-default-rtdb.europe-west1.firebasedatabase.app';
 const VOTED_KEY = 'ateliers-de-mondes-voted-v1';
 let voteCounts = {};
 let votedSet = new Set(loadVotedIds());
@@ -279,56 +278,45 @@ function loadVotedIds(){
 function saveVotedIds(){
   try{ localStorage.setItem(VOTED_KEY, JSON.stringify([...votedSet])); }catch(e){}
 }
-function counterHeaders(){
-  return {};
-}
-function parseCount(json){
-  const d = json && json.data ? json.data : json;
-  if(!d) return null;
-  if(typeof d.value === 'number') return d.value;
-  if(typeof d.up_count === 'number'){
-    const down = typeof d.down_count === 'number' ? d.down_count : 0;
-    return d.up_count - down;
-  }
-  if(typeof d.count === 'number') return d.count;
-  return null;
-}
 async function fetchAllVotes(){
   const counts = {};
-  await Promise.all(data.map(async w => {
-    try{
-      const res = await fetch(`https://api.counterapi.dev/v2/${VOTE_WORKSPACE}/${encodeURIComponent(w.id)}`, {
-        headers: counterHeaders()
-      });
-      if(res.ok){
-        const json = await res.json();
-        const val = parseCount(json);
-        counts[w.id] = typeof val === 'number' ? val : 0;
-      } else {
-        counts[w.id] = 0;
+  try{
+    const res = await fetch(`${FIREBASE_BASE}/votes.json`);
+    if(res.ok){
+      const json = await res.json();
+      if(json){
+        Object.keys(json).forEach(id => {
+          if(typeof json[id] === 'number') counts[id] = json[id];
+        });
       }
-    }catch(e){ counts[w.id] = 0; }
-  }));
+    }
+  }catch(e){ /* pas de réseau : on repart de 0, sans planter le site */ }
   return counts;
 }
 async function voteFor(id){
   const alreadyVoted = votedSet.has(id);
-  const direction = alreadyVoted ? 'down' : 'up';
+  const delta = alreadyVoted ? -1 : 1;
 
   if(alreadyVoted){ votedSet.delete(id); } else { votedSet.add(id); }
   saveVotedIds();
-  voteCounts[id] = Math.max(0, (voteCounts[id] || 0) + (alreadyVoted ? -1 : 1));
+  voteCounts[id] = Math.max(0, (voteCounts[id] || 0) + delta);
   render();
 
   try{
-    const res = await fetch(`https://api.counterapi.dev/v2/${VOTE_WORKSPACE}/${encodeURIComponent(id)}/${direction}`, {
-      headers: counterHeaders()
-    });
-    if(res.ok){
-      const json = await res.json();
-      const val = parseCount(json);
-      if(typeof val === 'number'){ voteCounts[id] = val; render(); }
+    // on relit la valeur juste avant d'écrire pour limiter les conflits entre deux votants simultanés
+    const getRes = await fetch(`${FIREBASE_BASE}/votes/${encodeURIComponent(id)}.json`);
+    let current = 0;
+    if(getRes.ok){
+      const json = await getRes.json();
+      if(typeof json === 'number') current = json;
     }
+    const updated = Math.max(0, current + delta);
+    const putRes = await fetch(`${FIREBASE_BASE}/votes/${encodeURIComponent(id)}.json`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updated)
+    });
+    if(putRes.ok){ voteCounts[id] = updated; render(); }
   }catch(e){ /* le vote reste compté localement même si le réseau a raté */ }
 }
 
