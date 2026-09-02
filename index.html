@@ -93,6 +93,17 @@
     display:flex; align-items:center; justify-content:center;
   }
   .card-del:hover{ background: #a63b3b; }
+  .vote-btn{
+    position:absolute; top: 0.6rem; left: 0.6rem; z-index: 3;
+    display:flex; align-items:center; gap: 0.35rem;
+    background: rgba(20,17,15,0.78); border: 1px solid rgba(237,230,218,0.22);
+    color: var(--parchment); font-size: 0.82rem; padding: 0.32rem 0.65rem 0.32rem 0.55rem;
+    border-radius: 20px; line-height: 1;
+  }
+  .vote-btn:hover:not(:disabled){ border-color: var(--ember); }
+  .vote-btn:disabled{ cursor: default; }
+  .vote-btn.voted{ color: var(--ember); border-color: var(--ember); }
+  .vote-btn .star{ font-size: 0.95rem; }
 
   .add-card{
     display:flex; flex-direction: column; align-items:center; justify-content:center;
@@ -251,6 +262,56 @@ let publishedData = null;
 let editMode = false;
 let usingDraft = false;
 
+/* ---------- votes (partagés via CounterAPI, sans compte) ---------- */
+const VOTE_NAMESPACE = 'goulven-atelier-jdr-mjc-vam';
+const VOTED_KEY = 'ateliers-de-mondes-voted-v1';
+let voteCounts = {};
+let votedSet = new Set(loadVotedIds());
+
+function loadVotedIds(){
+  try{
+    const raw = localStorage.getItem(VOTED_KEY);
+    if(raw) return JSON.parse(raw);
+  }catch(e){}
+  return [];
+}
+function saveVotedIds(){
+  try{ localStorage.setItem(VOTED_KEY, JSON.stringify([...votedSet])); }catch(e){}
+}
+async function fetchAllVotes(){
+  const counts = {};
+  await Promise.all(data.map(async w => {
+    try{
+      const res = await fetch(`https://api.counterapi.dev/v1/${VOTE_NAMESPACE}/${encodeURIComponent(w.id)}`);
+      if(res.ok){
+        const json = await res.json();
+        counts[w.id] = json.count ?? json.value ?? 0;
+      } else {
+        counts[w.id] = 0;
+      }
+    }catch(e){ counts[w.id] = 0; }
+  }));
+  return counts;
+}
+async function voteFor(id){
+  const alreadyVoted = votedSet.has(id);
+  const direction = alreadyVoted ? 'down' : 'up';
+
+  if(alreadyVoted){ votedSet.delete(id); } else { votedSet.add(id); }
+  saveVotedIds();
+  voteCounts[id] = Math.max(0, (voteCounts[id] || 0) + (alreadyVoted ? -1 : 1));
+  render();
+
+  try{
+    const res = await fetch(`https://api.counterapi.dev/v1/${VOTE_NAMESPACE}/${encodeURIComponent(id)}/${direction}`);
+    if(res.ok){
+      const json = await res.json();
+      const val = json.count ?? json.value;
+      if(typeof val === 'number'){ voteCounts[id] = val; render(); }
+    }
+  }catch(e){ /* le vote reste compté localement même si le réseau a raté */ }
+}
+
 async function fetchPublished(){
   try{
     const res = await fetch('./data.json', {cache: 'no-store'});
@@ -277,6 +338,7 @@ async function init(){
   } else {
     data = JSON.parse(JSON.stringify(seed));
   }
+  voteCounts = await fetchAllVotes();
   render();
 }
 function saveData(){
@@ -376,9 +438,16 @@ function render(){
 }
 
 function renderHome(app){
-  let cards = data.map(w => `
+  const sorted = [...data].sort((a, b) => (voteCounts[b.id] || 0) - (voteCounts[a.id] || 0));
+  let cards = sorted.map(w => {
+    const count = voteCounts[w.id] || 0;
+    const voted = votedSet.has(w.id);
+    return `
     <a class="card" href="#/${encodeURIComponent(w.id)}" style="--accent:${w.accent}">
       ${editMode ? `<button class="card-del" title="Retirer" data-del="${w.id}">&times;</button>` : ''}
+      <button class="vote-btn ${voted ? 'voted' : ''}" data-vote="${w.id}" title="${voted ? 'Retirer mon vote' : 'Ce jeu me tente'}">
+        <span class="star">${voted ? '★' : '☆'}</span><span>${count}</span>
+      </button>
       <div class="card-image" style="${w.image ? `background-image:url(${w.image})` : ''}">
         ${w.image ? '' : 'Aucune image'}
       </div>
@@ -388,7 +457,8 @@ function renderHome(app){
         <div class="card-tagline">${escapeHtml(w.tagline)}</div>
       </div>
     </a>
-  `).join('');
+  `;
+  }).join('');
 
   if(editMode){
     cards += `<button class="card add-card" id="addWorldBtn"><span class="plus">+</span>Ajouter un JDR</button>`;
@@ -413,6 +483,12 @@ function renderHome(app){
       });
     });
   }
+  app.querySelectorAll('[data-vote]').forEach(btn => {
+    btn.addEventListener('click', e => {
+      e.preventDefault(); e.stopPropagation();
+      voteFor(btn.getAttribute('data-vote'));
+    });
+  });
 }
 
 function renderDetail(app, w){
