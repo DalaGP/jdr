@@ -262,8 +262,9 @@ let publishedData = null;
 let editMode = false;
 let usingDraft = false;
 
-/* ---------- votes (partagés via CounterAPI, sans compte) ---------- */
-const VOTE_NAMESPACE = 'goulven-atelier-jdr-mjc-vam';
+/* ---------- votes (partagés via CounterAPI v2, compte + workspace) ---------- */
+const VOTE_WORKSPACE = 'goulven-atelier-jdr';
+const VOTE_TOKEN = 'ut_Tvu91EHw8mZhjQkg5VEVH7Y1ZPVPtzncy7nqYKD9';
 const VOTED_KEY = 'ateliers-de-mondes-voted-v1';
 let voteCounts = {};
 let votedSet = new Set(loadVotedIds());
@@ -278,14 +279,31 @@ function loadVotedIds(){
 function saveVotedIds(){
   try{ localStorage.setItem(VOTED_KEY, JSON.stringify([...votedSet])); }catch(e){}
 }
+function counterHeaders(){
+  return { 'Authorization': `Bearer ${VOTE_TOKEN}` };
+}
+function parseCount(json){
+  const d = json && json.data ? json.data : json;
+  if(!d) return null;
+  if(typeof d.value === 'number') return d.value;
+  if(typeof d.up_count === 'number'){
+    const down = typeof d.down_count === 'number' ? d.down_count : 0;
+    return d.up_count - down;
+  }
+  if(typeof d.count === 'number') return d.count;
+  return null;
+}
 async function fetchAllVotes(){
   const counts = {};
   await Promise.all(data.map(async w => {
     try{
-      const res = await fetch(`https://api.counterapi.dev/v1/${VOTE_NAMESPACE}/${encodeURIComponent(w.id)}`);
+      const res = await fetch(`https://api.counterapi.dev/v2/${VOTE_WORKSPACE}/${encodeURIComponent(w.id)}`, {
+        headers: counterHeaders()
+      });
       if(res.ok){
         const json = await res.json();
-        counts[w.id] = json.count ?? json.value ?? 0;
+        const val = parseCount(json);
+        counts[w.id] = typeof val === 'number' ? val : 0;
       } else {
         counts[w.id] = 0;
       }
@@ -303,10 +321,12 @@ async function voteFor(id){
   render();
 
   try{
-    const res = await fetch(`https://api.counterapi.dev/v1/${VOTE_NAMESPACE}/${encodeURIComponent(id)}/${direction}`);
+    const res = await fetch(`https://api.counterapi.dev/v2/${VOTE_WORKSPACE}/${encodeURIComponent(id)}/${direction}`, {
+      headers: counterHeaders()
+    });
     if(res.ok){
       const json = await res.json();
-      const val = json.count ?? json.value;
+      const val = parseCount(json);
       if(typeof val === 'number'){ voteCounts[id] = val; render(); }
     }
   }catch(e){ /* le vote reste compté localement même si le réseau a raté */ }
