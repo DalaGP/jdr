@@ -280,7 +280,7 @@ function saveVotedIds(){
   try{ localStorage.setItem(VOTED_KEY, JSON.stringify([...votedSet])); }catch(e){}
 }
 function counterHeaders(){
-  return { 'Authorization': `Bearer ${VOTE_TOKEN}` };
+  return {};
 }
 function parseCount(json){
   const d = json && json.data ? json.data : json;
